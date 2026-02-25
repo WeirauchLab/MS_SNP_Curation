@@ -2,6 +2,12 @@
 title: "All MS Risk Variants"
 format: html
 editor: visual
+date: 2026-02-25
+author:
+  - name: Ellie Kim
+    email: ellie.kim@cchmc.org
+    affiliation:
+      - name: CCHMC
 ---
 
 ```{r}

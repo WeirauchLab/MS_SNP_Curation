@@ -11,3 +11,4 @@ in.snp.LD-pvalue-pruned
 *.log
 .Rhistory
 .DS_Store
+.Rproj.user

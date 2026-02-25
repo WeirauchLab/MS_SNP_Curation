@@ -1,0 +1,13 @@
+*.txt
+*.xls*
+~$*.xls*
+*.svg
+*.bed
+*.bb
+LDexpansion/**
+*.bat
+snp.missing
+in.snp.LD-pvalue-pruned
+*.log
+.Rhistory
+.DS_Store

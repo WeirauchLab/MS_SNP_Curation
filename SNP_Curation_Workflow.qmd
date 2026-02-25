@@ -1,0 +1,523 @@
+---
+title: "All MS Risk Variants"
+format: html
+editor: visual
+---
+
+```{r}
+
+library(readxl)
+library(writexl)
+library(dplyr)
+library(openxlsx)
+library(stringr)
+library(chromoMap)
+library(rtracklayer)
+library(stringr)
+library(readr)
+library(tidyr)
+
+```
+
+## Getting RELI Pre-Processing
+
+So far, we have a list of tag risk variants from curated GWAS studies. We need to perform LD-pruning to get all independent risk loci.
+
+```{r}
+RELI_prep <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "RELI_input")
+
+write.table(RELI_prep, 
+            file = "reli_input_mock.txt", 
+            sep = "\t",             # Use tabs (common for .txt files)
+            row.names = FALSE,      # Prevents R from adding a column of row numbers
+            quote = FALSE)          # Removes quotes around text values (cleaner look)
+```
+
+Run RELI LD pruning
+
+``` unix
+{r}
+module load reli/0.1.1a
+
+reli-ld-prune \
+  -in reli_input.txt \
+  -ancestry EUR \
+  -build hg38
+```
+
+Output of RELI LD pruning: in.snp.LD-pvalue-pruned and snp.missing (not found in PLINK database)
+
+Question: Add those missing snps to the chromomap or not? Will make 2 versions. Note that this includes all the risk alleles from the GWAS catalog (including those tag variants I could not find the risk allele for).
+
+## Chromomap
+
+Chromomap of LD-pruned SNPs
+
+```{r}
+LD_pruned <- read.delim("in.snp.LD-pvalue-pruned", header = TRUE, sep = '\t')
+reference <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "Included_SNPs")
+reference_unique <- reference %>% distinct(SNPS, .keep_all = TRUE) # this is to prevent duplicate rsids. 
+
+library(dplyr)
+chromomap_table <- LD_pruned %>%
+  # Convert chr to "chrN"
+  mutate(chrN = paste0("chr", chr)) %>%
+  
+  # Join with reference table by rsid
+  left_join(reference_unique, by = c("rsID" = "SNPS")) %>%
+  
+  # Create start and end positions
+  mutate(
+    start_pos = CHR_POS,
+    end_pos = CHR_POS + 1,
+    label = "GWAS_Tag_Variant"
+  ) %>%
+  
+  # Select only required columns
+  select(rsID, chrN, start_pos, end_pos, label)
+
+write.table(chromomap_table, file = "chromomap_input_LDpruned.txt", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE )
+
+chromoMap(
+  "hg38_chromosomes.txt",
+  "chromomap_input_LDpruned.txt",
+  chr_color = c("black"),
+  data_based_color_map = FALSE,
+  data_type = "categorical",
+  data_colors = list(c("#6BAED6")),
+  legend = TRUE,
+  canvas_width = 900,
+  canvas_height = 920,
+  export.options = TRUE
+)
+```
+
+Chromomap of LD-pruned SNPs + missing SNPs
+
+```{r}
+snp_missing <- read.delim("snp.missing", header = FALSE, sep = "\t")
+chromomap_table_missing <- snp_missing %>%
+  # Join with reference table by rsid
+  left_join(reference_unique, by = c("V1" = "SNPS")) %>%
+  
+  # Create start and end positions
+  mutate(
+    chrN = paste("chr", CHR_ID),
+    start_pos = CHR_POS,
+    end_pos = CHR_POS + 1,
+    label = "GWAS_Tag_Variant"
+  ) %>%
+  
+  # Select only required columns
+  select(V1, chrN, start_pos, end_pos, label)
+
+write.table(chromomap_table_missing, file = "chromomap_input_snp_missing.txt", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE )
+
+# join both tables - LD pruned + snp missing
+pruned <- read.delim("chromomap_input_LDpruned.txt", header = FALSE, sep = '\t')
+missing <- read.delim("chromomap_input_snp_missing.txt", header = FALSE, sep = '\t')
+combined <- bind_rows(pruned, missing)
+write.table(combined, file = "chromomap_input_combinedLD+missing.txt", sep = "\t", row.names = FALSE, col.names = FALSE, quote = FALSE )
+
+
+chromoMap(
+  "hg38_chromosomes.txt",
+  "chromomap_input_combinedLD+missing.txt",
+  chr_color = c("black"),
+  data_based_color_map = FALSE,
+  data_type = "categorical",
+  data_colors = list(c("#6BAED6")),
+  legend = TRUE,
+  canvas_width = 900,
+  canvas_height = 920,
+  export.options = TRUE
+)
+```
+
+LD Expansion
+
+``` unix
+{r}
+module load ez_pipeline/0.8
+
+ez_pipeline -input in.snp.LD-pvalue-pruned -dir . -ldexpansion -ancestry EUR -build hg38
+
+bash step_1.bat
+```
+
+Now, we have the tag snp and the expanded snp, along with the R2. Let's build a table with all the information. Going forward, tables should only have **6152 rows**. (now 6150 after de-duplication).
+
+```{r}
+LD_pairs <- read.table("./LDexpansion/snp_expanded.bed", header = FALSE, fill = TRUE, stringsAsFactors = FALSE)
+LD_pairs <- LD_pairs[LD_pairs$V1 != "CHR_A", ]
+colnames(LD_pairs) <- c("CHR_TAG", "POS_TAG", "SNP_TAG", "CHR_EXP", "BP_EXP", "SNP_EXP", "R2")
+LD_pairs <- LD_pairs %>%
+  select("SNP_TAG", "CHR_TAG", "POS_TAG", "SNP_EXP", "CHR_EXP", "BP_EXP", "R2")
+
+write.xlsx(LD_pairs, file = "MS_Risk_SNPs.xlsx", rowNames = FALSE)
+
+```
+
+## Converting chr pos to rsID
+
+RELI gave us a mix of rsID and chromosome positions after LD expansion. We will convert chromosome positions to rsID using UCSC snp tables. First, we convert the big bed file to a bed file.
+
+``` unix
+{r}
+bigBedToBed dbSnp155Common.bb dbSnp155Common.bed
+```
+
+```{r}
+dbsnp_df <- read.table( "dbSnp155Common_minimal.bed", sep = "\t", header = FALSE, stringsAsFactors = FALSE ) 
+
+colnames(dbsnp_df) <- c("chrom", "chromStart", "chromEnd", "rsid", "ref", "alts")
+
+# extract chr:pos entries from the SNP_EXP column. 
+df_chrpos <- LD_pairs %>% 
+  filter(grepl("^chr[0-9XYM]+:[0-9]+", SNP_EXP)) %>% 
+  mutate( 
+    chrom = str_extract(SNP_EXP, "^chr[0-9XYM]+"), 
+    pos = as.integer(str_extract(SNP_EXP, "(?<=:)[0-9]+")) 
+    )
+
+# join with the dbSNP df by chrom and chromStart
+df_chrpos_joined <- df_chrpos %>% 
+  left_join( 
+    dbsnp_df, by = c("chrom" = "chrom", "pos" = "chromStart") 
+    )
+
+# this created more rows, so that means there are duplicated chr positions that matched to multiple rsIDs. Let's handle these multi-hit positions by collapsing rsIDs. 
+df_chrpos_joined <- df_chrpos_joined %>% 
+  group_by(SNP_EXP) %>% 
+  summarise( rsid = paste(unique(rsid), collapse = ","), .groups = "drop" )
+
+# replace chr:pos entries in the original df. 
+LD_pairs_fixed <- LD_pairs %>% 
+  left_join(df_chrpos_joined, by = "SNP_EXP") %>% 
+  mutate(SNP_EXP = ifelse(!is.na(rsid), rsid, SNP_EXP)) %>% 
+  select(-rsid)
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNP_chrtorsid")
+writeData(wb, "SNP_chrtorsid", LD_pairs_fixed)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+## Add Ancestry annotation
+
+Ancestry annotations need to be added prior to frequency since we want ancestry specific frequency information.
+
+```{r}
+ref_ancestry <- reference %>% 
+  select(SNPS, `INITIAL SAMPLE SIZE`) %>% 
+  distinct(SNPS, .keep_all = TRUE)
+
+LD_pairs_ancestry <- LD_pairs_fixed %>% 
+  left_join(ref_ancestry, by = c("SNP_TAG" = "SNPS")) %>% 
+  mutate(
+    Ancestry = case_when(
+      str_detect(`INITIAL SAMPLE SIZE`, regex("Taiwan", ignore_case = TRUE)) ~ "EAS",
+      str_detect(`INITIAL SAMPLE SIZE`, regex("African", ignore_case = TRUE)) ~ "AFR",
+      TRUE ~ "EUR"
+    )
+  ) %>% 
+  select(-`INITIAL SAMPLE SIZE`)
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNP_ancestry")
+writeData(wb, "SNP_ancestry", LD_pairs_ancestry)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+## Ref/Alt Alleles
+
+Let's also add the reference and alt alleles. This seems a little round-about because making the LD_pairs_with_refalt made a lot of duplicated rows, so we used the results from that ref/alt to make our reference ref/alt columns.
+
+```{r}
+dbsnp_refalt <- dbsnp_df %>%
+  select(rsid, ref, alts)
+
+LD_pairs_with_refalt <- LD_pairs_ancestry %>% left_join(dbsnp_refalt, by = c("SNP_EXP" = "rsid"))
+
+collapsed_refalt <- LD_pairs_with_refalt %>%
+  group_by(SNP_EXP) %>%
+  summarise(
+    ref  = paste(unique(ref), collapse = ","),
+    alts = paste(unique(alts), collapse = ","),
+    .groups = "drop"
+  )
+
+LD_pairs_final_refalt <- LD_pairs_ancestry %>% left_join(collapsed_refalt, by = "SNP_EXP")
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNP_refalt")
+writeData(wb, "SNP_refalt", LD_pairs_final_refalt)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+## PLINK —freq
+
+To obtain ancestry-specific frequency information, we use PLINK.
+
+``` unix
+{r}
+awk '$3=="AFR"{print $1}' integrated_call_samples_v3.20130502.ALL.panel > afr_samples.txt
+awk '$3=="EUR"{print $1}' integrated_call_samples_v3.20130502.ALL.panel > eur_samples.txt
+
+# edit this file manually to duplicate the column. I named this file AFR_keep.txt and EUR_keep.txt
+```
+
+Split the snps of interest by Ancestry.
+
+```{r}
+SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNP_refalt")
+
+EUR_snps <- SNPs %>% 
+  filter(Ancestry == "EUR", !is.na(SNP_EXP)) %>% 
+  pull(SNP_EXP) %>% 
+  unique()
+
+write.table(EUR_snps, file = "EUR_snps_of_interest.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+AFR_snps <- SNPs %>% 
+  filter(Ancestry == "AFR",!is.na(SNP_EXP)) %>% 
+  pull(SNP_EXP) %>% 
+  unique()
+
+write.table(AFR_snps, file = "AFR_snps_of_interest.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+# these files will be moved to the PLINK folder for plink --freq functions. 
+```
+
+Run PLINK (used /1.90b)
+
+``` unix
+{r}
+for chr in {1..22}; do
+  plink \
+    --bfile chr${chr}_1000G \
+    --keep EUR_keep.txt \
+    --extract EUR_snps_of_interest.txt \
+    --freq \
+    --out eur_freq_chr${chr}
+done
+
+for chr in {1..22}; do
+  plink \
+    --bfile chr${chr}_1000G \
+    --keep AFR_keep.txt \
+    --extract AFR_snps_of_interest.txt \
+    --freq \
+    --out afr_freq_chr${chr}
+done
+```
+
+Integrating PLINK results: First, we get the .frq files into a readable format.
+
+```{r}
+eur_freq <- lapply(1:22, function(chr) {
+  read_table(
+    paste0("../plink/eur_freq_chr", chr, ".frq"),
+    col_types = cols(
+      CHR      = col_integer(),
+      SNP      = col_character(),
+      A1       = col_character(),
+      A2       = col_character(),
+      MAF      = col_double(),
+      NCHROBS  = col_double()
+    )
+  )
+}) %>%
+  bind_rows()
+
+eur_freq <- eur_freq %>%
+  mutate(
+    minor_allele = A1,
+    major_allele = A2,
+    minor_af = MAF,
+    major_af = 1 - MAF
+  )
+eur_freq <- subset(eur_freq, select = -c(A1, A2, MAF, NCHROBS))
+eur_freq_unique <- eur_freq %>%
+  group_by(SNP) %>%
+  slice(1) %>%  # keep the first occurrence
+  ungroup()
+
+afr_freq <- lapply(c(5,20), function(chr) {
+  read_table(
+    paste0("../plink/afr_freq_chr", chr, ".frq"),
+    col_types = cols(
+      CHR      = col_integer(),
+      SNP      = col_character(),
+      A1       = col_character(),
+      A2       = col_character(),
+      MAF      = col_double(),
+      NCHROBS  = col_double()
+    )
+  )
+}) %>%
+  bind_rows()
+
+afr_freq <- afr_freq %>%
+  mutate(
+    minor_allele = A1,
+    major_allele = A2,
+    minor_af = MAF,
+    major_af = 1 - MAF
+  )
+afr_freq <- subset(afr_freq, select = -c(A1, A2, MAF, NCHROBS))
+```
+
+Adding to excel sheet
+
+```{r}
+SNPs_frq <- SNPs %>%
+  mutate(
+    snp_maj = NA_character_,
+    snp_min = NA_character_,
+    snp_maj_af = NA_real_,
+    snp_min_af = NA_real_,
+    tag_maj = NA_character_,
+    tag_min = NA_character_,
+    tag_maj_af = NA_real_,
+    tag_min_af = NA_real_
+  )
+
+SNPs_frq <- SNPs_frq %>% 
+  left_join( 
+    eur_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_EXP" = "SNP") ) %>% 
+  mutate( 
+    snp_maj = ifelse(Ancestry == "EUR", major_allele, snp_maj), 
+    snp_min = ifelse(Ancestry == "EUR", minor_allele, snp_min), 
+    snp_maj_af = ifelse(Ancestry == "EUR", major_af, snp_maj_af), 
+    snp_min_af = ifelse(Ancestry == "EUR", minor_af, snp_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+SNPs_frq <- SNPs_frq %>% 
+  left_join( 
+    afr_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_EXP" = "SNP") ) %>% 
+  mutate( 
+    snp_maj = ifelse(Ancestry == "AFR", major_allele, snp_maj), 
+    snp_min = ifelse(Ancestry == "AFR", minor_allele, snp_min), 
+    snp_maj_af = ifelse(Ancestry == "AFR", major_af, snp_maj_af), 
+    snp_min_af = ifelse(Ancestry == "AFR", minor_af, snp_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+
+# Adding in tag variant info
+SNPs_frq <- SNPs_frq %>% 
+  left_join( 
+    eur_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_TAG" = "SNP") ) %>% 
+  mutate( 
+    tag_maj = ifelse(Ancestry == "EUR", major_allele, tag_maj), 
+    tag_min = ifelse(Ancestry == "EUR", minor_allele, tag_min), 
+    tag_maj_af = ifelse(Ancestry == "EUR", major_af, tag_maj_af), 
+    tag_min_af = ifelse(Ancestry == "EUR", minor_af, tag_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+SNPs_frq <- SNPs_frq %>% 
+  left_join( 
+    afr_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_TAG" = "SNP") ) %>% 
+  mutate( 
+    tag_maj = ifelse(Ancestry == "AFR", major_allele, tag_maj), 
+    tag_min = ifelse(Ancestry == "AFR", minor_allele, tag_min), 
+    tag_maj_af = ifelse(Ancestry == "AFR", major_af, tag_maj_af), 
+    tag_min_af = ifelse(Ancestry == "AFR", minor_af, tag_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+
+
+# make sure to take care of duplicate snps (removed manually in excel)
+dup_snps <- SNPs_frq %>% count(SNP_EXP) %>% filter(n > 1)
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNPS_frq")
+writeData(wb, "SNPS_frq", SNPs_frq)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+## Risk Alleles
+
+```{r}
+RiskAlleles <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "Tag_Risk_Alleles")
+
+SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNPs_frq")
+
+SNPs_risk <- SNPs %>%
+  
+  # 1. Join risk alleles by SNP_TAG
+  left_join(
+    RiskAlleles %>% select(SNP, Risk),
+    by = c("SNP_TAG" = "SNP")
+  ) %>%
+  
+  # 2. Create tag_risk (Risk column from RiskAlleles)
+  mutate(
+    tag_risk = Risk
+  ) %>%
+  
+  # 3. Assign snp_risk with full error handling
+  mutate(
+    snp_risk = case_when(
+      # No reported risk allele for this SNP_TAG
+      is.na(tag_risk) ~ "ERROR: no reported tag risk allele",
+      
+      # tag_risk matches tag major allele
+      tag_risk == tag_maj ~ snp_maj,
+      
+      # tag_risk matches tag minor allele
+      tag_risk == tag_min ~ snp_min,
+      
+      # tag_risk exists but does not match either allele
+      TRUE ~ "ERROR: risk allele does not match"
+    )
+  ) %>%
+  
+  # 4. Remove the Risk column (optional)
+  select(-Risk)
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNPs_risk")
+writeData(wb, "SNPs_risk", SNPs_risk)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+So far, 793 SNPs are missing frequency information (not in 1000G vX database) so they do not have risk allele information. This is 793/6150 SNPs = 13% of the SNPs.

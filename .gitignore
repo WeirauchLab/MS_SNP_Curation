@@ -1,6 +1,7 @@
 *.txt
 *.xls*
 ~$*.xls*
+!gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx
 *.svg
 *.bed
 *.bb

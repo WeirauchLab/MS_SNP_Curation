@@ -10,8 +10,17 @@ author:
       - name: CCHMC
 ---
 
-```{r}
+**Methods**
 
+*Curation of MS Risk SNPs* 
+
+Summary statistics for the trait “multiple sclerosis” were downloaded from the GWAS Catalog (doi.org/10.1093/nar/gkae1070) on February, 2026. Because results included MS-like conditions like neuromyelitis optica, results were further filtered to include only the multiple sclerosis trait. SNPs meeting GWAS significance at p \< 5e-8 were included. Our inclusion criteria for curating MS risk SNPs were studies that compared a group of MS patients to a cohort of healthy controls, and these studies are listed in Table S1. Therefore, studies that compared traits within the MS cohort (i.e., antibody status, drug response), and studies that compared MS to another trait (i.e. MS compared to cardiovascular disease or cancers) were excluded.  
+
+*Annotation of LD-Expanded Risk SNPs*  
+
+To nominate unique risk loci, the list of GWAS-nominated tag SNPs were LD-pruned using PLINK (doi.org/10.1086/519795) with a cutoff of R\^2 \> 0.8. These risk loci were then LD-expanded using PLINK and the 1000Genomes phase 3 database (doi.org/10.1038/nature15393). The expanded SNPs that were not given a rsID were labeled with one, if applicable, using UCSC SNP table dbSnp155 (doi.org/10.1093/nar/gky1048). Allele frequencies for tag and expanded SNPs were computed using PLINK and the 1000Genome phase 3 database. SNPs that were not found in this database were supplemented with information from the 1000Genomes 30X coverage database (doi.org/10.1016/j.cell.2022.08.004). Risk allele annotations were assigned based on whether the given risk allele corresponded to the major or minor allele. For example, if the risk allele of a tag variant is A which happens to be the major allele, the risk allele of the expanded variant is the major allele. In cases where the given risk allele did not correspond to either major or minor allele, the risk allele was manually cross checked with the original manuscript. Gene annotations for each SNP were obtained from SNPNexus (doi.org/10.1093/nar/gkaa420). 
+
+```{r}
 library(readxl)
 library(writexl)
 library(dplyr)
@@ -22,24 +31,27 @@ library(rtracklayer)
 library(stringr)
 library(readr)
 library(tidyr)
-
 ```
 
 ## Getting RELI Pre-Processing
 
 So far, we have a list of tag risk variants from curated GWAS studies. We need to perform LD-pruning to get all independent risk loci.
 
+Question: Do I need to provide the sheets I worked with?
+
 ```{r}
 RELI_prep <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "RELI_input")
 
 write.table(RELI_prep, 
-            file = "reli_input_mock.txt", 
-            sep = "\t",             # Use tabs (common for .txt files)
-            row.names = FALSE,      # Prevents R from adding a column of row numbers
-            quote = FALSE)          # Removes quotes around text values (cleaner look)
+            file = "reli_input.txt",
+            sep = "\t",
+            row.names = FALSE,
+            quote = FALSE)  
 ```
 
 Run RELI LD pruning
+
+Question: Do I need to explain how to get RELI? Link to github?
 
 ``` unix
 {r}
@@ -51,11 +63,11 @@ reli-ld-prune \
   -build hg38
 ```
 
-Output of RELI LD pruning: in.snp.LD-pvalue-pruned and snp.missing (not found in PLINK database)
-
-Question: Add those missing snps to the chromomap or not? Will make 2 versions. Note that this includes all the risk alleles from the GWAS catalog (including those tag variants I could not find the risk allele for).
+Relevant outputs of RELI LD pruning: in.snp.LD-pvalue-pruned and snp.missing (not found in PLINK 1000G phase 3 database)
 
 ## Chromomap
+
+This section creates a chromomap, which is a visual representation of the independent risk loci across the human genome.
 
 Chromomap of LD-pruned SNPs
 
@@ -64,12 +76,10 @@ LD_pruned <- read.delim("in.snp.LD-pvalue-pruned", header = TRUE, sep = '\t')
 reference <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "Included_SNPs")
 reference_unique <- reference %>% distinct(SNPS, .keep_all = TRUE) # this is to prevent duplicate rsids. 
 
-library(dplyr)
 chromomap_table <- LD_pruned %>%
   # Convert chr to "chrN"
   mutate(chrN = paste0("chr", chr)) %>%
   
-  # Join with reference table by rsid
   left_join(reference_unique, by = c("rsID" = "SNPS")) %>%
   
   # Create start and end positions
@@ -140,7 +150,7 @@ chromoMap(
 )
 ```
 
-LD Expansion
+LD Expansion from pruned list of rsids
 
 ``` unix
 {r}
@@ -151,7 +161,7 @@ ez_pipeline -input in.snp.LD-pvalue-pruned -dir . -ldexpansion -ancestry EUR -bu
 bash step_1.bat
 ```
 
-Now, we have the tag snp and the expanded snp, along with the R2. Let's build a table with all the information. Going forward, tables should only have **6152 rows**. (now 6150 after de-duplication).
+Now, we have the tag snp and the expanded snp, along with the R2. Let's build a table with all the information.
 
 ```{r}
 LD_pairs <- read.table("./LDexpansion/snp_expanded.bed", header = FALSE, fill = TRUE, stringsAsFactors = FALSE)
@@ -166,11 +176,12 @@ write.xlsx(LD_pairs, file = "MS_Risk_SNPs.xlsx", rowNames = FALSE)
 
 ## Converting chr pos to rsID
 
-RELI gave us a mix of rsID and chromosome positions after LD expansion. We will convert chromosome positions to rsID using UCSC snp tables. First, we convert the big bed file to a bed file.
+RELI gave us a mix of rsID and chromosome positions after LD expansion. We will convert chromosome positions to rsID using UCSC snp tables. First, we convert the big bed file to a bed file. The bigger bed file was minimized to a "minimal" bed with just the information we need for downstream processing.
 
 ``` unix
 {r}
 bigBedToBed dbSnp155Common.bb dbSnp155Common.bed
+cut -f1-5,7 dbSnp155Common.bed > dbSnp155Common_minimal.bed
 ```
 
 ```{r}
@@ -281,17 +292,15 @@ saveWorkbook(
 
 ## PLINK —freq
 
-To obtain ancestry-specific frequency information, we use PLINK.
+To obtain ancestry-specific frequency information, we use PLINK, which uses the 1000Genomes phase 3 database.
 
 ``` unix
 {r}
-awk '$3=="AFR"{print $1}' integrated_call_samples_v3.20130502.ALL.panel > afr_samples.txt
-awk '$3=="EUR"{print $1}' integrated_call_samples_v3.20130502.ALL.panel > eur_samples.txt
-
-# edit this file manually to duplicate the column. I named this file AFR_keep.txt and EUR_keep.txt
+awk '$3=="AFR"{print $1 "\t" $1}' integrated_call_samples_v3.20130502.ALL.panel > AFR_keep.txt
+awk '$3=="EUR"{print $1 "\t" $1}' integrated_call_samples_v3.20130502.ALL.panel > EUR_keep.txt
 ```
 
-Split the snps of interest by Ancestry.
+Split the SNPs of interest by Ancestry.
 
 ```{r}
 SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNP_refalt")
@@ -313,7 +322,7 @@ write.table(AFR_snps, file = "AFR_snps_of_interest.txt", quote = FALSE, row.name
 # these files will be moved to the PLINK folder for plink --freq functions. 
 ```
 
-Run PLINK (used /1.90b)
+Run PLINK (v.1.90b)
 
 ``` unix
 {r}
@@ -459,7 +468,7 @@ SNPs_frq <- SNPs_frq %>%
 
 
 
-# make sure to take care of duplicate snps (removed manually in excel)
+# Take care of duplicate SNPs in dup_snps manually in Excel (we kept the duplicate with frequency that was closest to the corresponding tag SNP)
 dup_snps <- SNPs_frq %>% count(SNP_EXP) %>% filter(n > 1)
 
 wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
@@ -476,42 +485,37 @@ saveWorkbook(
 
 ## Risk Alleles
 
+In this section, we are now annotating each SNP with the MS risk allele. The tag variant risk allele has been obtained from the GWAS catalog and by cross-referencing the manuscript the variant came from. These are logged in the sheet "Tag_Risk_Alleles" which will be used as the reference.
+
 ```{r}
 RiskAlleles <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "Tag_Risk_Alleles")
 
 SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNPs_frq")
 
 SNPs_risk <- SNPs %>%
-  
-  # 1. Join risk alleles by SNP_TAG
-  left_join(
+    left_join(
     RiskAlleles %>% select(SNP, Risk),
     by = c("SNP_TAG" = "SNP")
   ) %>%
-  
-  # 2. Create tag_risk (Risk column from RiskAlleles)
-  mutate(
+    mutate(
     tag_risk = Risk
   ) %>%
   
-  # 3. Assign snp_risk with full error handling
+  # assign snp_risk with error messages
   mutate(
     snp_risk = case_when(
       # No reported risk allele for this SNP_TAG
       is.na(tag_risk) ~ "ERROR: no reported tag risk allele",
-      
       # tag_risk matches tag major allele
       tag_risk == tag_maj ~ snp_maj,
-      
       # tag_risk matches tag minor allele
       tag_risk == tag_min ~ snp_min,
-      
       # tag_risk exists but does not match either allele
       TRUE ~ "ERROR: risk allele does not match"
     )
   ) %>%
   
-  # 4. Remove the Risk column (optional)
+  # remove the Risk column since it was only used as a reference
   select(-Risk)
 
 wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
@@ -526,4 +530,269 @@ saveWorkbook(
 )
 ```
 
-So far, 793 SNPs are missing frequency information (not in 1000G vX database) so they do not have risk allele information. This is 793/6150 SNPs = 13% of the SNPs.
+## Gene Annotation by SNPNexus
+
+We use the SNP annotation tool SNP Nexus to annotate each variant. We used overlapped gene information and related annotations.
+
+```{r}
+SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNPs_risk")
+
+# To get it into the format for input into SNPNexus:
+
+SNPs$BP_EXP <- as.numeric(as.character(SNPs$BP_EXP))
+
+regions <- data.frame(
+  region = "region",
+  chr = SNPs$CHR_EXP,
+  start = SNPs$BP_EXP,
+  end = SNPs$BP_EXP
+)
+
+write.table(
+  regions,
+  file = "snpnexus_inputregions.txt",
+  quote = FALSE,
+  sep = "\t",
+  row.names = FALSE,
+  col.names = FALSE
+)
+
+# submit for gene annotation using UCSC annotations. Download results by "TXT per annotation" to obtain overlapped gene info. 
+
+near_genes <- read.delim("annotation_MS_txt/near_gens.txt", stringsAsFactors = FALSE)
+
+near_genes_collapsed <- near_genes %>%
+  group_by(Chromosome, Position) %>%
+  summarise(
+    Overlapped.Gene = paste(unique(Overlapped.Gene), collapse = "; "),
+    Type            = paste(unique(Type), collapse = "; "),
+    Annotation      = paste(unique(Annotation), collapse = "; "),
+    .groups = "drop"
+  ) %>%
+  mutate(Chromosome = sub("^chr", "", Chromosome))
+
+SNPs_annotated <- SNPs %>%
+  left_join(
+    near_genes_collapsed,
+    by = c("CHR_EXP" = "Chromosome",
+           "BP_EXP"  = "Position")
+  )
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNPs_annotated")
+writeData(wb, "SNPs_annotated", SNPs_annotated)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+So far, 793 SNPs are missing frequency information (not in 1000G phase3 database) so they do not have risk allele information. This is 793/6150 SNPs = 13% of the SNPs. To fill in the 793 SNPs that were missing, we will use the 1000G 30X database for those that are in that database.
+
+## Using plink with 1000G 30x for missing frequencies
+
+From here on, the code logic is the same as previous sections. We first get a dataframe of all the SNPs that were missing (793 SNPs), separate them by ancestry to fill in frequency information, and fill in risk allele information.
+
+```{r}
+SNPs_missing <- read_excel("MS_Risk_SNPs.xlsx", sheet = "missing_frq")
+
+EUR_snps <- SNPs %>% 
+  filter(Ancestry == "EUR", !is.na(SNP_EXP)) %>% 
+  pull(SNP_EXP) %>% 
+  unique()
+
+write.table(EUR_snps, file = "EUR_snps_of_interest_missing.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+AFR_snps <- SNPs %>% 
+  filter(Ancestry == "AFR",!is.na(SNP_EXP)) %>% 
+  pull(SNP_EXP) %>% 
+  unique()
+
+write.table(AFR_snps, file = "AFR_snps_of_interest_missing.txt", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+# these files will be moved to the PLINK folder for plink --freq functions. 
+```
+
+``` unix
+{r}
+for chr in {1..22}; do
+  plink \
+    --bfile /data/CAGE_clusterdata/PLINK_1000_Genome_30X_hg38/Binary/${chr} \
+    --keep EUR_keep.txt \
+    --extract EUR_snps_of_interest_missing.txt \
+    --freq \
+    --out missing_eur_freq_chr${chr}
+done
+
+for chr in {1..22}; do
+  plink \
+    --bfile /data/CAGE_clusterdata/PLINK_1000_Genome_30X_hg38/Binary/${chr} \
+    --keep AFR_keep.txt \
+    --extract AFR_snps_of_interest_missing.txt \
+    --freq \
+    --out missing_afr_freq_chr${chr}
+done
+```
+
+```{r}
+eur_freq <- lapply(c(1:8, 10:22), function(chr) {
+  read_table(
+    paste0("../plink/missing_eur_freq_chr", chr, ".frq"),
+    col_types = cols(
+      CHR      = col_integer(),
+      SNP      = col_character(),
+      A1       = col_character(),
+      A2       = col_character(),
+      MAF      = col_double(),
+      NCHROBS  = col_double()
+    )
+  )
+}) %>%
+  bind_rows()
+
+eur_freq <- eur_freq %>%
+  mutate(
+    minor_allele = A1,
+    major_allele = A2,
+    minor_af = MAF,
+    major_af = 1 - MAF
+  )
+eur_freq <- subset(eur_freq, select = -c(A1, A2, MAF, NCHROBS))
+eur_freq_unique <- eur_freq %>%
+  distinct(SNP, .keep_all = TRUE)
+
+afr_freq <- lapply(5, function(chr) {
+  read_table(
+    paste0("../plink/missing_afr_freq_chr", chr, ".frq"),
+    col_types = cols(
+      CHR      = col_integer(),
+      SNP      = col_character(),
+      A1       = col_character(),
+      A2       = col_character(),
+      MAF      = col_double(),
+      NCHROBS  = col_double()
+    )
+  )
+}) %>%
+  bind_rows()
+
+afr_freq <- afr_freq %>%
+  mutate(
+    minor_allele = A1,
+    major_allele = A2,
+    minor_af = MAF,
+    major_af = 1 - MAF
+  )
+afr_freq <- subset(afr_freq, select = -c(A1, A2, MAF, NCHROBS))
+
+```
+
+```{r}
+
+SNPs_missing <- SNPs_missing %>% 
+  left_join( 
+    eur_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_EXP" = "SNP") ) %>% 
+  mutate( 
+    snp_maj = ifelse(Ancestry == "EUR", major_allele, snp_maj), 
+    snp_min = ifelse(Ancestry == "EUR", minor_allele, snp_min), 
+    snp_maj_af = ifelse(Ancestry == "EUR", major_af, snp_maj_af), 
+    snp_min_af = ifelse(Ancestry == "EUR", minor_af, snp_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+SNPs_missing <- SNPs_missing %>% 
+  left_join( 
+    afr_freq %>% 
+      select(SNP, major_allele, minor_allele, major_af, minor_af), 
+    by = c("SNP_EXP" = "SNP") ) %>% 
+  mutate( 
+    snp_maj = ifelse(Ancestry == "AFR", major_allele, snp_maj), 
+    snp_min = ifelse(Ancestry == "AFR", minor_allele, snp_min), 
+    snp_maj_af = ifelse(Ancestry == "AFR", major_af, snp_maj_af), 
+    snp_min_af = ifelse(Ancestry == "AFR", minor_af, snp_min_af) ) %>% 
+  select(-major_allele, -minor_allele, -major_af, -minor_af)
+
+
+# Take care of duplicate SNPs in dup_snps manually in Excel (we kept the duplicate with frequency that was closest to the corresponding tag SNP)
+dup_snps <- SNPs_missing %>% count(SNP_EXP) %>% filter(n > 1)
+
+
+SNPs_missing <- SNPs_missing %>%
+  mutate(
+    snp_risk = case_when(
+      is.na(tag_risk) ~ "ERROR: no reported tag risk allele",
+      tag_risk == tag_maj ~ snp_maj,
+      tag_risk == tag_min ~ snp_min,
+      TRUE ~ "ERROR: risk allele does not match"
+    )
+  )
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNPS_missing_filled")
+writeData(wb, "SNPS_missing_filled", SNPs_missing)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+```{r}
+# filling in the main sheet using the filled in "missing frequency" SNPs 
+SNPs <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNPs_annotated")
+SNPs_missing <- read_excel("MS_Risk_SNPs.xlsx", sheet = "SNPS_missing_filled")
+
+SNPs_missing <- SNPs_missing %>%
+  mutate(
+    BP_EXP = as.numeric(BP_EXP),
+    CHR_EXP = as.numeric(CHR_EXP),
+    POS_TAG = as.numeric(POS_TAG),
+    CHR_TAG = as.numeric(CHR_TAG)
+  )
+SNPs <- SNPs %>%
+  mutate(
+    BP_EXP = as.numeric(BP_EXP),
+    CHR_EXP = as.numeric(CHR_EXP),
+    POS_TAG = as.numeric(POS_TAG),
+    CHR_TAG = as.numeric(CHR_TAG)
+  )
+
+SNPs <- SNPs %>%
+  left_join(
+    SNPs_missing %>%
+      select(SNP_EXP, CHR_EXP, BP_EXP, SNP_TAG, CHR_TAG, POS_TAG,
+             snp_maj, snp_min,
+             snp_maj_af, snp_min_af,
+             snp_risk),
+    by = c("SNP_EXP", "CHR_EXP", "BP_EXP", "SNP_TAG"),
+    suffix = c("", "_new")
+  ) %>%
+  mutate(
+    snp_maj    = coalesce(snp_maj, snp_maj_new),
+    snp_min    = coalesce(snp_min, snp_min_new),
+    snp_maj_af = coalesce(snp_maj_af, snp_maj_af_new),
+    snp_min_af = coalesce(snp_min_af, snp_min_af_new),
+    snp_risk   = coalesce(snp_risk, snp_risk_new)
+  ) %>%
+  select(-ends_with("_new"))
+
+wb <- loadWorkbook("MS_Risk_SNPs.xlsx")
+addWorksheet(wb, "SNPS_filledwith_1000G30x")
+writeData(wb, "SNPS_filledwith_1000G30x", SNPs)
+
+# Save back to the same file
+saveWorkbook(
+  wb,
+  "MS_Risk_SNPs.xlsx",
+  overwrite = TRUE
+)
+```
+
+-   After referencing the 1000G 30X database, 332/6150 (\~5%) SNPs are still missing frequency.
+-   By the end of this workflow, we now have a list of LD-expanded MS risk variants with corresponding risk allele annotation for 95% of the variants. These risk variants are also annotated by overlapped gene and characteristics (i.e., intronic, coding, etc.)

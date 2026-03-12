@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+if git status --porcelain | grep -qE '\.(pdf|(doc|ppt|xls)x?)'; then
+    make check
+fi

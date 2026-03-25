@@ -37,8 +37,6 @@ library(tidyr)
 
 So far, we have a list of tag risk variants from curated GWAS studies. We need to perform LD-pruning to get all independent risk loci.
 
-Question: Do I need to provide the sheets I worked with?
-
 ```{r}
 RELI_prep <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "RELI_input")
 
@@ -49,12 +47,12 @@ write.table(RELI_prep,
             quote = FALSE)  
 ```
 
-Run RELI LD pruning
+Run [RELI](https://github.com/weirauchlab/reli#how-to-cite) LD pruning (https://doi.org/10.1038/s41588-018-0102-3)
 
-Question: Do I need to explain how to get RELI? Link to github?
+RELI has pre-processing steps (LD pruning and LD expansion) that takes a list of SNPs and "prunes" it down to unique loci. Then, we perform LD-expansion to get the list of all SNPs that are in the same LD-block as the unique loci, giving us the broadest coverage of all potential MS risk variants.
 
 ``` unix
-{r}
+
 module load reli/0.1.1a
 
 reli-ld-prune \
@@ -150,10 +148,10 @@ chromoMap(
 )
 ```
 
-LD Expansion from pruned list of rsids
+## LD Expansion from pruned list of rsids
 
 ``` unix
-{r}
+
 module load ez_pipeline/0.8
 
 ez_pipeline -input in.snp.LD-pvalue-pruned -dir . -ldexpansion -ancestry EUR -build hg38
@@ -179,7 +177,7 @@ write.xlsx(LD_pairs, file = "MS_Risk_SNPs.xlsx", rowNames = FALSE)
 RELI gave us a mix of rsID and chromosome positions after LD expansion. We will convert chromosome positions to rsID using UCSC snp tables. First, we convert the big bed file to a bed file. The bigger bed file was minimized to a "minimal" bed with just the information we need for downstream processing.
 
 ``` unix
-{r}
+
 bigBedToBed dbSnp155Common.bb dbSnp155Common.bed
 cut -f1-5,7 dbSnp155Common.bed > dbSnp155Common_minimal.bed
 ```
@@ -295,7 +293,7 @@ saveWorkbook(
 To obtain ancestry-specific frequency information, we use PLINK, which uses the 1000Genomes phase 3 database.
 
 ``` unix
-{r}
+
 awk '$3=="AFR"{print $1 "\t" $1}' integrated_call_samples_v3.20130502.ALL.panel > AFR_keep.txt
 awk '$3=="EUR"{print $1 "\t" $1}' integrated_call_samples_v3.20130502.ALL.panel > EUR_keep.txt
 ```
@@ -325,7 +323,7 @@ write.table(AFR_snps, file = "AFR_snps_of_interest.txt", quote = FALSE, row.name
 Run PLINK (v.1.90b)
 
 ``` unix
-{r}
+
 for chr in {1..22}; do
   plink \
     --bfile chr${chr}_1000G \
@@ -485,7 +483,7 @@ saveWorkbook(
 
 ## Risk Alleles
 
-In this section, we are now annotating each SNP with the MS risk allele. The tag variant risk allele has been obtained from the GWAS catalog and by cross-referencing the manuscript the variant came from. These are logged in the sheet "Tag_Risk_Alleles" which will be used as the reference.
+In this section, we are now annotating each SNP with the MS risk allele. The tag variant risk allele has been obtained from the GWAS catalog and by cross-referencing the manuscript the variant came from. These are logged in the sheet "Tag_Risk_Alleles" which will be used as the reference. Note that this reference was manually curated from the GWAS catalog and the supplemental files of the studies in the GWAS catalog.
 
 ```{r}
 RiskAlleles <- read_excel("gwas-association-downloaded_2026-02-13-MONDO_0005301-withChildTraits.xlsx", sheet = "Tag_Risk_Alleles")
@@ -592,9 +590,11 @@ saveWorkbook(
 
 So far, 793 SNPs are missing frequency information (not in 1000G phase3 database) so they do not have risk allele information. This is 793/6150 SNPs = 13% of the SNPs. To fill in the 793 SNPs that were missing, we will use the 1000G 30X database for those that are in that database.
 
-## Using plink with 1000G 30x for missing frequencies
+## Using plink with 1000G 30X for missing frequencies
 
 From here on, the code logic is the same as previous sections. We first get a dataframe of all the SNPs that were missing (793 SNPs), separate them by ancestry to fill in frequency information, and fill in risk allele information.
+
+The code blocks below are the same as the workflow above, just adjusted to fit the need to use the 30X coverage database.
 
 ```{r}
 SNPs_missing <- read_excel("MS_Risk_SNPs.xlsx", sheet = "missing_frq")
@@ -617,7 +617,6 @@ write.table(AFR_snps, file = "AFR_snps_of_interest_missing.txt", quote = FALSE, 
 ```
 
 ``` unix
-{r}
 for chr in {1..22}; do
   plink \
     --bfile /data/CAGE_clusterdata/PLINK_1000_Genome_30X_hg38/Binary/${chr} \

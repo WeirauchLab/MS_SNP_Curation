@@ -1,5 +1,7 @@
 # SNP Curation Workflow for MS Risk Variants
 
+[![DOI](https://zenodo.org/badge/1229282354.svg)](https://doi.org/10.5281/zenodo.20031172)
+
 Summary statistics for the trait “multiple sclerosis” were downloaded from the
 [GWAS Catalog][gwas]  on February, 2026. Because results
 included MS-like conditions like neuromyelitis optica, results were further
@@ -49,7 +51,7 @@ Other requirements such as RELI are noted in
 
 ## Citing
 
-This code is published as a part of this manuscript: 
+_This code pertains to a manuscript that is not currently published._
 
 ## Authors
 
